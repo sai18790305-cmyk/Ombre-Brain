@@ -583,6 +583,14 @@ def load_config(config_path: Optional[str] = None) -> dict:
         config["mcp_auth_mode"] = _env_mcp_auth_mode
 
     _apply_env_override(config, "OMBRE_MCP_TOKEN", "mcp_token")
+    # Public origin for OAuth metadata — lets reverse-proxy / Zeabur / Render deployments
+    # force https:// in OAuth discovery endpoints without modifying config.yaml.
+    # Set OMBRE_PUBLIC_URL=https://your-domain.zeabur.app in your platform's env variables.
+    _env_public_url = os.environ.get("OMBRE_PUBLIC_URL", "").strip()
+    if _env_public_url:
+        config.setdefault("deployment", {})["public_url"] = _env_public_url
+    
+    
 
     # 安全兜底：选了 token 模式却没配密钥——宁可继续用更强的 OAuth 兜底，也不要让用户
     # 误以为已经开了保护、实际上 /mcp 会因校验函数拿不到密钥而被意外锁死或裸奔。
