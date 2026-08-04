@@ -11,6 +11,20 @@ from mcp.types import ResourceLink
 from media_read import MEDIA_LINK_TTL_SECONDS, MediaReader, MediaReadError
 
 
+@pytest.mark.asyncio
+async def test_media_read_is_advertised_as_strictly_read_only():
+    from server import mcp
+
+    listed = next(item for item in await mcp.list_tools() if item.name == "media_read")
+    annotations = listed.annotations
+
+    assert annotations is not None
+    assert annotations.readOnlyHint is True
+    assert annotations.destructiveHint is False
+    assert annotations.openWorldHint is False
+    assert annotations.idempotentHint is True
+
+
 class _BucketManager:
     def __init__(self, buckets=None):
         self.buckets = buckets or {}

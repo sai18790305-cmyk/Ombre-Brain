@@ -41,7 +41,7 @@ import httpx
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from mcp.server.fastmcp import FastMCP
-from mcp.types import CallToolResult
+from mcp.types import CallToolResult, ToolAnnotations
 
 from bucket_manager import BucketManager
 from dehydrator import Dehydrator
@@ -893,7 +893,14 @@ async def dream(window_hours: Optional[int] = 48) -> str:
     )
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        openWorldHint=False,
+        idempotentHint=True,
+    )
+)
 async def media_read(
     bucket_id: Optional[str] = "",
     media_path: Optional[str] = "",
