@@ -118,9 +118,11 @@ def register(mcp) -> None:
         meta={
             "ui": {
                 "prefersBorder": True,
+                "domain": public_origin,
                 "csp": {"resourceDomains": [public_origin] if public_origin else []},
             },
             "openai/widgetDescription": "显示 Ombre Brain 中读取到的照片。",
+            "openai/widgetDomain": public_origin,
             "openai/widgetPrefersBorder": True,
             "openai/widgetCSP": {
                 "resource_domains": [public_origin] if public_origin else [],
