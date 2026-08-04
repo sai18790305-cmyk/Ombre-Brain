@@ -32,6 +32,7 @@ from . import ollama_local
 from . import config_api
 from . import onboarding
 from . import v3_debug
+from . import media
 
 
 _WEB_MODULES = (
@@ -53,6 +54,7 @@ _WEB_MODULES = (
     ("web.config_api", config_api.register),
     ("web.onboarding", onboarding.register),
     ("web.v3_debug", v3_debug.register),
+    ("web.media", media.register),
 )
 
 

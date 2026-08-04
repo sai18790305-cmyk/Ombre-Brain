@@ -8,8 +8,8 @@ DecayEngine / EmbeddingEngine / ImportEngine，把它们注入 tools._runtime �
 web._shared，然后以 @mcp.tool() 注册薄封装（真正的实现在 src/tools/<工具>/ 下面）。
 
 关键行为：
-- 启动后暴露 14 个 MCP 工具：breath/breath_search/breath_advanced/hold/grow/
-  trace/anchor/release/pulse/plan/letter_write/letter_read/dream/I；每个入口
+- 启动后暴露 15 个 MCP 工具：breath/breath_search/breath_advanced/hold/grow/
+  trace/anchor/release/pulse/plan/letter_write/letter_read/dream/I/media_read；每个入口
   ≤ 10 行，只负责转发。breath 拆成 breath()(0 参数)+breath_search(3 参数)+
   breath_advanced(9 参数) 三级，是因为 claude.ai 按需加载工具时会跳过参数
   复杂的工具，全塞一个 breath() 会导致它常年加载不上（见 issue #17）。
@@ -23,7 +23,7 @@ web._shared，然后以 @mcp.tool() 注册薄封装（真正的实现在 src/too
 - 不写 HTTP 路由处理（全在 web/* 下）；不写 LLM prompt（dehydrator 负责）
 - 不直接读写桶文件（bucket_manager 负责）
 
-对外暴露：mcp/mcp_extra 两个实例 + 14 个 @mcp*.tool() 函数；HTTP 路由在 src/web/*
+对外暴露：mcp/mcp_extra 两个实例 + 15 个 @mcp*.tool() 函数；HTTP 路由在 src/web/*
 ========================================
 """
 
@@ -41,6 +41,7 @@ import httpx
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult
 
 from bucket_manager import BucketManager
 from dehydrator import Dehydrator
@@ -405,7 +406,7 @@ _wsh.init_runtime(
 
 # =============================================================
 # 结构化操作日志 helpers（任务A，2026-05-03）
-# 给 14 个 MCP 工具入口统一打 entry/ok/err 三段日志，便于排查
+# 给 MCP 工具入口统一打 entry/ok/err 三段日志，便于排查
 # 客户端报 invalid_arguments / 静默错误等问题。
 # 输出格式：op=<name> phase=entry|ok|err key=value...
 # 所有可能含 PII 的字段（content / 信件正文等）只记 length，不记内容。
@@ -892,6 +893,18 @@ async def dream(window_hours: Optional[int] = 48) -> str:
     )
 
 
+@mcp.tool()
+async def media_read(
+    bucket_id: Optional[str] = "",
+    media_path: Optional[str] = "",
+) -> CallToolResult:
+    """只读获取 Ombre Brain 中已持久化的媒体原文件。且只传一种定位方式：bucket_id=返回该桶关联的全部媒体；media_path=返回库内 `_media/...` 指定文件。工具返回 5 分钟有效的标准 MCP resource_link，不返回 base64。路径穿越、绝对路径、符号链接和 `_media/` 之外的文件都会被拒绝。"""
+    return await _web.media.tool_result(
+        bucket_id=str(bucket_id or ""),
+        media_path=str(media_path or ""),
+    )
+
+
 # =============================================================
 # Dashboard API endpoints (for lightweight Web UI)
 # 仪表板 API（轻量 Web UI 用）
@@ -944,7 +957,7 @@ if __name__ == "__main__":
 
     # iter 2.2：合并为单连接器 /mcp。
     # 当初（iter 2.1）拆 /mcp + /mcp-extra 是因为 claude.ai 连接器存在 5 工具上限；
-    # 该上限现已解除，14 个工具全部挂在主实例 mcp 上对外暴露一条 /mcp 即可，
+    # 该上限现已解除，15 个工具全部挂在主实例 mcp 上对外暴露一条 /mcp 即可，
     # 顺带消除「第二个连接器」在 Claude.ai 侧的 OAuth/连接器校验疑难。
     # mcp_extra 仅作历史工具分组容器保留（7 个 @mcp_extra.tool() 注册不动），
     # 这里把它的工具回灌进 mcp，让 stdio / sse / streamable-http 三种 transport 一致。
@@ -1003,7 +1016,7 @@ if __name__ == "__main__":
             lifecycle=_runtime_lifecycle,
         )
         if transport == "streamable-http":
-            logger.info("MCP 单连接器 /mcp：14 个工具统一对外暴露")
+            logger.info("MCP 单连接器 /mcp：15 个工具统一对外暴露")
         logger.info("CORS middleware enabled for remote transport / 已启用 CORS 中间件")
         logger.info(
             "MCP request body limit: %s",
@@ -1034,7 +1047,7 @@ if __name__ == "__main__":
             logger.warning(
                 "=" * 60 + "\n"
                 "⚠️  MCP 认证已关闭 (mcp_require_auth: false)：/mcp 无需任何令牌即可直连，\n"
-                "    14 个记忆工具全部对外开放——任何能访问本端口的人都能读写你的全部记忆。\n"
+                "    15 个记忆工具全部对外开放——任何能访问本端口的人都能读写你的全部记忆。\n"
                 "    本服务监听 0.0.0.0，若端口暴露到局域网/公网，请务必用反代鉴权、防火墙\n"
                 "    或仅绑定 127.0.0.1 保护；仅在可信内网/本机自有前端场景才建议关闭鉴权。\n"
                 + "=" * 60
@@ -1074,5 +1087,5 @@ if __name__ == "__main__":
             proxy_headers=False,
         )
     else:
-        # stdio：工具已在启动入口处统一回灌进 mcp（14 个全暴露），这里直接跑。
+        # stdio：工具已在启动入口处统一回灌进 mcp（15 个全暴露），这里直接跑。
         mcp.run(transport=transport)
