@@ -899,7 +899,13 @@ async def dream(window_hours: Optional[int] = 48) -> str:
         destructiveHint=False,
         openWorldHint=False,
         idempotentHint=True,
-    )
+    ),
+    meta={
+        "ui": {"resourceUri": _web.media.MEDIA_VIEWER_URI},
+        "openai/outputTemplate": _web.media.MEDIA_VIEWER_URI,
+        "openai/toolInvocation/invoking": "正在读取照片…",
+        "openai/toolInvocation/invoked": "照片已读取",
+    },
 )
 async def media_read(
     bucket_id: Optional[str] = "",

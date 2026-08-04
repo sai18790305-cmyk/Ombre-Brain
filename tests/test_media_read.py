@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from mcp.types import ResourceLink
+from mcp.types import ResourceLink, TextContent
 
 from media_read import MEDIA_LINK_TTL_SECONDS, MediaReader, MediaReadError
 
@@ -23,6 +23,27 @@ async def test_media_read_is_advertised_as_strictly_read_only():
     assert annotations.destructiveHint is False
     assert annotations.openWorldHint is False
     assert annotations.idempotentHint is True
+    assert listed.meta["ui"]["resourceUri"] == "ui://ombre-brain/media-viewer-v1.html"
+    assert listed.meta["openai/outputTemplate"] == "ui://ombre-brain/media-viewer-v1.html"
+
+
+@pytest.mark.asyncio
+async def test_media_read_returns_structured_preview_urls(tmp_path, monkeypatch):
+    from web import media as media_web
+
+    bucket = {"metadata": {"media": ["_media/bucket-1/photo.png"]}}
+    test_reader, vault = _reader(tmp_path, {"bucket": bucket})
+    (vault / "_media" / "bucket-1" / "photo.png").write_bytes(b"png")
+    monkeypatch.setattr(media_web, "_reader_instance", test_reader)
+
+    result = await media_web.tool_result(bucket_id="bucket")
+
+    assert result.structuredContent["items"][0]["mime_type"] == "image/png"
+    assert result.structuredContent["items"][0]["url"].startswith(
+        "https://brain.example/media/read?token="
+    )
+    assert isinstance(result.content[0], TextContent)
+    assert isinstance(result.content[1], ResourceLink)
 
 
 class _BucketManager:
