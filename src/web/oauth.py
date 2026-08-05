@@ -96,14 +96,13 @@ class OAuthPersistenceError(RuntimeError):
 def _oauth_required_from_config() -> bool:
     """Snapshot the effective MCP auth mode used for this server process.
 
-    OAuth and the static-token mode (mcp_auth_mode: "token") are mutually
-    exclusive: when token mode is selected, every OAuth discovery/register/
-    authorize/token route below 404s via _oauth_not_found(), same as when
-    mcp_require_auth is false outright.
+    OAuth remains available in oauth and hybrid modes.  Only pure token mode
+    hides discovery/register/authorize/token via _oauth_not_found().
     """
     return (
         parse_bool(sh.config.get("mcp_require_auth", True), default=True)
-        and str(sh.config.get("mcp_auth_mode", "oauth")).strip().lower() == "oauth"
+        and str(sh.config.get("mcp_auth_mode", "oauth")).strip().lower()
+        in ("oauth", "hybrid")
     )
 
 
@@ -760,7 +759,7 @@ def _is_valid_mcp_token(token: str, resource: str = "") -> bool:
 
 
 def _is_valid_static_mcp_token(token: str, resource: str = "") -> bool:
-    """Validate against the static mcp_auth_mode=token secret.
+    """Validate against the static token used by token/hybrid auth modes.
 
     Reads sh.config / env fresh on every call (no startup snapshot) so that
     regenerating the token via the Dashboard takes effect immediately without

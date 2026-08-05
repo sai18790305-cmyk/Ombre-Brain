@@ -39,13 +39,16 @@ mcp_require_auth: true
 
 # --- MCP auth mode / MCP 鉴权模式（仅 mcp_require_auth: true 时生效）---
 # "oauth" (默认): 上面的 OAuth 2.1 + PKCE。
-# "token": 改用静态密钥鉴权，与 OAuth 互斥——选了 token 后 OAuth 的 discovery/register/
+# "hybrid": 保留 OAuth 完整权限，同时接受一个只读静态 Token；适合同一实例服务
+#           ChatGPT/Claude 与不支持 OAuth 的 Kelivo。
+# "token": 只使用静态密钥——选了 token 后 OAuth 的 discovery/register/
 #          authorize/token 路由全部 404。适合支持自定义请求头、但走不通浏览器 OAuth
 #          授权流程的第三方 MCP 客户端。密钥填在 mcp_token（或环境变量 OMBRE_MCP_TOKEN，
 #          优先级更高），也可用环境变量 OMBRE_MCP_AUTH_MODE=token 覆盖。
 # 调用方式：请求头 Authorization: Bearer <token> 或 Ombre-MCP-Token: <token>（不支持 URL 参数）。
 # "oauth" (default): OAuth 2.1 + PKCE above.
-# "token": switch to a static secret instead, mutually exclusive with OAuth — once selected,
+# "hybrid": keep full OAuth access and also accept a read-only pre-shared static token.
+# "token": switch to a static secret only — once selected,
 #          the OAuth discovery/register/authorize/token routes all 404. Useful for third-party
 #          MCP clients that support custom headers but can't complete browser OAuth. Set the
 #          secret via mcp_token (or env var OMBRE_MCP_TOKEN, which takes priority); env var

@@ -34,6 +34,22 @@ DEFAULT_HEALTH_PROBE_TIMEOUT_SECONDS = 5.0
 DEFAULT_KEEPALIVE_INITIAL_DELAY_SECONDS = 10.0
 DEFAULT_KEEPALIVE_INTERVAL_SECONDS = 60.0
 
+# The shared OAuth endpoint keeps the complete tool surface.  A static token
+# accepted in hybrid mode is deliberately narrower: it can only discover and
+# call tools that do not create, edit, archive, or delete stored memories.
+READ_ONLY_STATIC_MCP_TOOLS = frozenset(
+    {
+        "breath",
+        "breath_search",
+        "breath_advanced",
+        "pulse",
+        "letter_read",
+        "dream",
+        "media_read",
+    }
+)
+_MCP_AUTH_KIND_STATE_KEY = "ombre_mcp_auth_kind"
+
 TokenValidator = Callable[..., bool]
 AsyncCallback = Callable[[], Awaitable[Any]]
 
@@ -45,8 +61,8 @@ class HTTPRuntimeSettings:
     auth_required: bool
     max_request_bytes: int
     max_management_request_bytes: int = DEFAULT_MAX_MANAGEMENT_REQUEST_BYTES
-    # "oauth" (default) or "token" — only consulted when auth_required is True.
-    # Mutually exclusive: see MCPAuthMiddleware and web/oauth.py's route 404s.
+    # "oauth" (default), "token", or "hybrid".  In hybrid mode OAuth keeps
+    # full access while the pre-shared static token is read-only.
     auth_mode: str = "oauth"
     # Canonical external origin captured from the same startup config snapshot
     # used by OAuth route registration.  An empty value means request-derived
@@ -78,7 +94,7 @@ class HTTPRuntimeSettings:
             DEFAULT_MAX_MANAGEMENT_REQUEST_BYTES,
         )
         auth_mode = str(config.get("mcp_auth_mode", "oauth")).strip().lower()
-        if auth_mode not in ("oauth", "token"):
+        if auth_mode not in ("oauth", "token", "hybrid"):
             auth_mode = "oauth"
         return cls(
             auth_required=parse_bool(
@@ -192,6 +208,7 @@ class MCPAuthMiddleware:
         *,
         auth_required: bool,
         token_validator: TokenValidator,
+        static_token_validator: TokenValidator | None = None,
         auth_mode: str = "oauth",
         path_matcher: Callable[[object], bool] = is_mcp_endpoint_path,
         resource_path: str = "/mcp",
@@ -200,7 +217,10 @@ class MCPAuthMiddleware:
         self.app = app
         self.auth_required = bool(auth_required)
         self.token_validator = token_validator
-        self.auth_mode = auth_mode if auth_mode in ("oauth", "token") else "oauth"
+        self.static_token_validator = static_token_validator
+        self.auth_mode = (
+            auth_mode if auth_mode in ("oauth", "token", "hybrid") else "oauth"
+        )
         self.path_matcher = path_matcher
         self.resource_path = "/" + str(resource_path or "mcp").strip("/")
         self.public_origin = normalize_public_origin(public_origin)
@@ -220,16 +240,45 @@ class MCPAuthMiddleware:
             # that same resource, not independently token-bound resources.
             resource = f"{base}{self.resource_path}"
             bearer_token = _extract_bearer_token(auth)
-            valid = bool(bearer_token) and self.token_validator(
-                bearer_token, resource=resource
-            )
-            if not valid and self.auth_mode == "token":
+            valid = False
+            auth_kind = ""
+            if bearer_token:
+                primary_valid = bool(
+                    self.token_validator(bearer_token, resource=resource)
+                )
+                static_valid = False
+                if self.auth_mode == "hybrid" and self.static_token_validator:
+                    # Run both validators before combining their results so the
+                    # response timing does not reveal which token class matched.
+                    static_valid = bool(
+                        self.static_token_validator(bearer_token, resource=resource)
+                    )
+                valid = primary_valid | static_valid
+                if static_valid:
+                    # If an operator accidentally reuses one token in both
+                    # stores, choose the narrower permission set.
+                    auth_kind = "static-readonly"
+                elif primary_valid:
+                    auth_kind = "static" if self.auth_mode == "token" else "oauth"
+            if not valid and self.auth_mode in ("token", "hybrid"):
                 # Fallback header for MCP clients that can't customize Authorization.
                 alt_token = headers.get(b"ombre-mcp-token", b"").decode(
                     "latin-1"
                 ).strip()
                 if alt_token:
-                    valid = self.token_validator(alt_token, resource=resource)
+                    static_validator = self.static_token_validator
+                    if static_validator is None and self.auth_mode == "token":
+                        # Preserve the original token-mode calling convention.
+                        static_validator = self.token_validator
+                    valid = bool(static_validator) and static_validator(
+                        alt_token, resource=resource
+                    )
+                    if valid:
+                        auth_kind = (
+                            "static-readonly"
+                            if self.auth_mode == "hybrid"
+                            else "static"
+                        )
             if not valid:
                 endpoint = self.resource_path.strip("/")
                 if self.auth_mode == "token":
@@ -270,7 +319,263 @@ class MCPAuthMiddleware:
                     }
                 )
                 return
+            if auth_kind:
+                state = scope.setdefault("state", {})
+                if isinstance(state, dict):
+                    state[_MCP_AUTH_KIND_STATE_KEY] = auth_kind
         await self.app(scope, receive, send)
+
+
+class MCPStaticTokenReadOnlyMiddleware:
+    """Restrict a hybrid-mode static token to an allowlisted MCP tool surface.
+
+    OAuth requests pass through unchanged.  For the static token, ``tools/list``
+    JSON responses are filtered for client ergonomics and every ``tools/call``
+    is independently enforced, so a cached or hand-written call cannot bypass
+    the list filter.  Unknown future tools fail closed.
+    """
+
+    def __init__(
+        self,
+        app: Any,
+        *,
+        path_matcher: Callable[[object], bool] = is_mcp_endpoint_path,
+        allowed_tools: frozenset[str] = READ_ONLY_STATIC_MCP_TOOLS,
+    ) -> None:
+        self.app = app
+        self.path_matcher = path_matcher
+        self.allowed_tools = frozenset(allowed_tools)
+
+    @staticmethod
+    def _request_items(payload: Any) -> list[Mapping[str, Any]]:
+        if isinstance(payload, Mapping):
+            return [payload]
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, Mapping)]
+        return []
+
+    def _blocked_tool_call(self, payload: Any) -> tuple[Any, str] | None:
+        for item in self._request_items(payload):
+            if item.get("method") != "tools/call":
+                continue
+            params = item.get("params")
+            tool_name = (
+                str(params.get("name", "")).strip()
+                if isinstance(params, Mapping)
+                else ""
+            )
+            if tool_name not in self.allowed_tools:
+                return item.get("id"), tool_name or "<missing>"
+        return None
+
+    @classmethod
+    def _is_tools_list_request(cls, payload: Any) -> bool:
+        return any(
+            item.get("method") == "tools/list"
+            for item in cls._request_items(payload)
+        )
+
+    def _filter_tools_list_payload(self, payload: Any) -> Any:
+        if isinstance(payload, list):
+            return [self._filter_tools_list_payload(item) for item in payload]
+        if not isinstance(payload, dict):
+            return payload
+        result = payload.get("result")
+        if not isinstance(result, dict) or not isinstance(result.get("tools"), list):
+            return payload
+        filtered_result = dict(result)
+        filtered_result["tools"] = [
+            tool
+            for tool in result["tools"]
+            if isinstance(tool, Mapping)
+            and str(tool.get("name", "")) in self.allowed_tools
+        ]
+        return {**payload, "result": filtered_result}
+
+    def _filter_sse_tools_list_body(self, body: bytes) -> bytes:
+        """Filter the one-line JSON ``data:`` fields emitted by FastMCP SSE."""
+
+        try:
+            text = body.decode("utf-8")
+        except UnicodeDecodeError:
+            return body
+        filtered_lines: list[str] = []
+        changed = False
+        for line in text.splitlines(keepends=True):
+            content = line.rstrip("\r\n")
+            newline = line[len(content) :]
+            if not content.startswith("data:"):
+                filtered_lines.append(line)
+                continue
+            prefix, raw_payload = content.split(":", 1)
+            leading_space = " " if raw_payload.startswith(" ") else ""
+            try:
+                payload = json.loads(raw_payload.lstrip(" "))
+            except json.JSONDecodeError:
+                filtered_lines.append(line)
+                continue
+            filtered = self._filter_tools_list_payload(payload)
+            filtered_lines.append(
+                prefix
+                + ":"
+                + leading_space
+                + json.dumps(
+                    filtered,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
+                + newline
+            )
+            changed = changed or filtered != payload
+        return "".join(filtered_lines).encode("utf-8") if changed else body
+
+    @staticmethod
+    async def _read_and_replay(receive: Any) -> tuple[bytes, Any] | None:
+        messages: list[dict] = []
+        chunks: list[bytes] = []
+        while True:
+            message = await receive()
+            if not isinstance(message, dict):
+                return None
+            messages.append(message)
+            if message.get("type") == "http.disconnect":
+                return None
+            if message.get("type") != "http.request":
+                continue
+            chunks.append(message.get("body", b""))
+            if not message.get("more_body", False):
+                break
+
+        message_iter = iter(messages)
+
+        async def replay_receive() -> dict:
+            try:
+                return next(message_iter)
+            except StopIteration:
+                return await receive()
+
+        return b"".join(chunks), replay_receive
+
+    @staticmethod
+    async def _send_read_only_error(send: Any, request_id: Any, tool_name: str) -> None:
+        payload = {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "error": {
+                "code": -32001,
+                "message": (
+                    "Kelivo static-token access is read-only; "
+                    f"tool '{tool_name}' is not allowed"
+                ),
+            },
+        }
+        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                    (b"cache-control", b"no-store"),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body, "more_body": False})
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        state = scope.get("state")
+        if (
+            scope.get("type") != "http"
+            or str(scope.get("method", "GET")).upper() != "POST"
+            or not self.path_matcher(scope.get("path"))
+            or not isinstance(state, Mapping)
+            or state.get(_MCP_AUTH_KIND_STATE_KEY) != "static-readonly"
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        captured = await self._read_and_replay(receive)
+        if captured is None:
+            return
+        body, replay_receive = captured
+        try:
+            request_payload = json.loads(body)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            await self.app(scope, replay_receive, send)
+            return
+
+        blocked = self._blocked_tool_call(request_payload)
+        if blocked is not None:
+            await self._send_read_only_error(send, blocked[0], blocked[1])
+            return
+
+        if not self._is_tools_list_request(request_payload):
+            await self.app(scope, replay_receive, send)
+            return
+
+        response_start: dict | None = None
+        response_chunks: list[bytes] = []
+        buffering_response = False
+        response_content_type = b""
+
+        async def filter_tools_list_response(message: dict) -> None:
+            nonlocal response_start, buffering_response, response_content_type
+            if message.get("type") == "http.response.start":
+                headers = {
+                    key.lower(): value for key, value in message.get("headers", [])
+                }
+                content_type = headers.get(b"content-type", b"").lower()
+                if content_type.startswith(
+                    (b"application/json", b"text/event-stream")
+                ):
+                    response_start = message
+                    buffering_response = True
+                    response_content_type = content_type
+                    return
+                await send(message)
+                return
+            if message.get("type") != "http.response.body" or not buffering_response:
+                await send(message)
+                return
+            response_chunks.append(message.get("body", b""))
+            if message.get("more_body", False):
+                return
+
+            original_body = b"".join(response_chunks)
+            filtered_body = original_body
+            if response_content_type.startswith(b"text/event-stream"):
+                filtered_body = self._filter_sse_tools_list_body(original_body)
+            else:
+                try:
+                    response_payload = json.loads(original_body)
+                    filtered_body = json.dumps(
+                        self._filter_tools_list_payload(response_payload),
+                        separators=(",", ":"),
+                        ensure_ascii=False,
+                    ).encode("utf-8")
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    pass
+
+            assert response_start is not None
+            filtered_headers = [
+                (key, value)
+                for key, value in response_start.get("headers", [])
+                if key.lower() != b"content-length"
+            ]
+            filtered_headers.append(
+                (b"content-length", str(len(filtered_body)).encode("ascii"))
+            )
+            await send({**response_start, "headers": filtered_headers})
+            await send(
+                {
+                    "type": "http.response.body",
+                    "body": filtered_body,
+                    "more_body": False,
+                }
+            )
+
+        await self.app(scope, replay_receive, filter_tools_list_response)
 
 
 class MCPAcceptShim:
@@ -642,6 +947,7 @@ def build_http_app(
     settings: HTTPRuntimeSettings,
     token_validator: TokenValidator,
     lifecycle: RuntimeLifecycle,
+    static_token_validator: TokenValidator | None = None,
 ) -> Any:
     """Build the HTTP/SSE ASGI app with one consistent middleware stack."""
 
@@ -669,6 +975,11 @@ def build_http_app(
         mcp_path_matcher=mcp_path_matcher,
         public_origin=settings.public_origin,
     )
+    if settings.auth_mode == "hybrid":
+        app.add_middleware(
+            MCPStaticTokenReadOnlyMiddleware,
+            path_matcher=mcp_path_matcher,
+        )
     app.add_middleware(
         MCPRequestBodyLimitMiddleware,
         max_bytes=settings.max_request_bytes,
@@ -684,6 +995,7 @@ def build_http_app(
         MCPAuthMiddleware,
         auth_required=settings.auth_required,
         token_validator=token_validator,
+        static_token_validator=static_token_validator,
         auth_mode=settings.auth_mode,
         path_matcher=mcp_path_matcher,
         resource_path="/mcp",

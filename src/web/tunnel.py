@@ -141,7 +141,7 @@ def register(mcp) -> None:
             ),
             "mcp_auth_mode": (
                 str(sh.config.get("mcp_auth_mode", "oauth")).strip().lower()
-                if str(sh.config.get("mcp_auth_mode", "oauth")).strip().lower() in ("oauth", "token")
+                if str(sh.config.get("mcp_auth_mode", "oauth")).strip().lower() in ("oauth", "token", "hybrid")
                 else "oauth"
             ),
             "last_error": _tunnel_last_error if not running else "",

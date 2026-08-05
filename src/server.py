@@ -950,8 +950,8 @@ async def media_read(
 
 # ============================================================
 # OAuth 2.0 — MCP Remote Auth —— 已拆分到 web/oauth.py（路由在其 register 内注册）。
-# 这里把启动期 MCP 鉴权中间件要用的两个校验函数 import 回来：mcp_auth_mode=="oauth"（默认）
-# 用 _is_valid_mcp_token，mcp_auth_mode=="token" 用 _is_valid_static_mcp_token，二选一注入中间件。
+# 这里把启动期 MCP 鉴权中间件要用的两个校验函数 import 回来；hybrid 会同时注入，
+# 其中 OAuth 保留完整能力，静态 Token 由中间件限制为只读工具。
 # ============================================================
 from web.oauth import _is_valid_mcp_token, _is_valid_static_mcp_token  # noqa: F401
 
@@ -1021,12 +1021,18 @@ if __name__ == "__main__":
             if _http_settings.auth_mode == "token"
             else _is_valid_mcp_token
         )
+        _mcp_static_token_validator = (
+            _is_valid_static_mcp_token
+            if _http_settings.auth_mode == "hybrid"
+            else None
+        )
         _app = build_http_app(
             mcp,
             transport,
             settings=_http_settings,
             token_validator=_mcp_token_validator,
             lifecycle=_runtime_lifecycle,
+            static_token_validator=_mcp_static_token_validator,
         )
         if transport == "streamable-http":
             logger.info("MCP 单连接器 /mcp：15 个工具统一对外暴露")
@@ -1050,6 +1056,17 @@ if __name__ == "__main__":
                 "    该模式与 OAuth 互斥，本进程不再提供 OAuth 授权流程；请勿把本服务\n"
                 "    直接暴露到公网，仅在可信内网或自带鉴权的隧道场景使用，并妥善保管、\n"
                 "    定期轮换该 Token。\n"
+                + "=" * 60
+            )
+        elif _mcp_auth_required and _http_settings.auth_mode == "hybrid":
+            logger.info(
+                "MCP OAuth + 只读静态 Token 共存鉴权已启用 / "
+                "MCP OAuth + read-only static-token auth enabled"
+            )
+            logger.warning(
+                "=" * 60 + "\n"
+                "⚠️  共存模式保留 OAuth 完整能力；静态 Token 只能发现和调用只读工具。\n"
+                "    请仅向受信任客户端分发，勿提交仓库或截图分享，并定期轮换。\n"
                 + "=" * 60
             )
         elif _mcp_auth_required:
@@ -1085,7 +1102,11 @@ if __name__ == "__main__":
             OMBRE_PORT,
             (
                 "开启(需静态 Token)" if _http_settings.auth_mode == "token"
-                else "开启(需 OAuth Bearer)"
+                else (
+                    "开启(OAuth 完整权限 / 静态 Token 只读)"
+                    if _http_settings.auth_mode == "hybrid"
+                    else "开启(需 OAuth Bearer)"
+                )
             ) if _mcp_auth_required
             else "关闭(免 token 直连，仅限可信内网/本机)",
         )

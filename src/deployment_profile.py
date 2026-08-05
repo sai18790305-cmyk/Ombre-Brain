@@ -148,8 +148,8 @@ def validate_profile_patch(patch: Mapping[str, Any]) -> list[str]:
     if profile == PROFILE_PUBLIC:
         if not auth_required:
             issues.append("公网安全模式不能关闭 OAuth")
-        if auth_mode != "oauth":
-            issues.append("公网安全模式必须使用 OAuth 鉴权模式")
+        if auth_mode not in {"oauth", "hybrid"}:
+            issues.append("公网安全模式必须包含 OAuth 鉴权（oauth 或 hybrid）")
         if public_url:
             if not normalize_public_https_origin(public_url):
                 issues.append("公网地址必须是 HTTPS 域名或完整的 /mcp 地址")
@@ -183,14 +183,14 @@ def effective_configuration_report(
         else effective_auth
     )
     effective_auth_mode = str(runtime_config.get("mcp_auth_mode") or "oauth").strip().lower()
-    if effective_auth_mode not in {"oauth", "token"}:
+    if effective_auth_mode not in {"oauth", "token", "hybrid"}:
         effective_auth_mode = "oauth"
     saved_auth_mode = (
         str(persisted_config.get("mcp_auth_mode") or "oauth").strip().lower()
         if "mcp_auth_mode" in persisted_config
         else effective_auth_mode
     )
-    if saved_auth_mode not in {"oauth", "token"}:
+    if saved_auth_mode not in {"oauth", "token", "hybrid"}:
         saved_auth_mode = "oauth"
     environment_sources: list[dict[str, str]] = []
     source_map = {

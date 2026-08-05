@@ -72,13 +72,13 @@ def _rebuild_embedding_runtime():
 
 
 def _mcp_auth_mode(config: Mapping[str, object] | object) -> str:
-    """Normalize one config snapshot's mutually exclusive MCP auth mode."""
+    """Normalize one config snapshot's MCP auth mode."""
     raw = (
         str(config.get("mcp_auth_mode", "oauth")).strip().lower()
         if isinstance(config, Mapping)
         else "oauth"
     )
-    return raw if raw in ("oauth", "token") else "oauth"
+    return raw if raw in ("oauth", "token", "hybrid") else "oauth"
 
 
 def _current_mcp_token() -> str:
@@ -181,7 +181,7 @@ def register(mcp) -> None:
             {"name": "OMBRE_LOG_FILE", "group": "system", "label": "日志文件路径", "sensitive": False, **_plain("OMBRE_LOG_FILE")},
             {"name": "OMBRE_CONFIG_PATH", "group": "system", "label": "配置文件路径", "sensitive": False, **_plain("OMBRE_CONFIG_PATH")},
             {"name": "OMBRE_MCP_REQUIRE_AUTH", "group": "auth", "label": "MCP OAuth 开关覆盖", "sensitive": False, **_plain("OMBRE_MCP_REQUIRE_AUTH")},
-            {"name": "OMBRE_MCP_AUTH_MODE", "group": "auth", "label": "MCP 鉴权模式覆盖 (oauth/token)", "sensitive": False, **_plain("OMBRE_MCP_AUTH_MODE")},
+            {"name": "OMBRE_MCP_AUTH_MODE", "group": "auth", "label": "MCP 鉴权模式覆盖 (oauth/token/hybrid)", "sensitive": False, **_plain("OMBRE_MCP_AUTH_MODE")},
             {"name": "OMBRE_MCP_TOKEN", "group": "auth", "label": "MCP 静态 Token", "sensitive": True, **_masked("OMBRE_MCP_TOKEN")},
             {"name": "AI_NAME", "group": "identity", "label": "AI 显示名", "sensitive": False, **_plain("AI_NAME")},
             # 路径组
@@ -308,9 +308,9 @@ def register(mcp) -> None:
             mcp_auth_mode_value = None
             if "mcp_auth_mode" in body:
                 mcp_auth_mode_value = str(body["mcp_auth_mode"]).strip().lower()
-                if mcp_auth_mode_value not in ("oauth", "token"):
+                if mcp_auth_mode_value not in ("oauth", "token", "hybrid"):
                     return JSONResponse(
-                        {"error": "mcp_auth_mode must be 'oauth' or 'token'"},
+                        {"error": "mcp_auth_mode must be 'oauth', 'token', or 'hybrid'"},
                         status_code=400,
                     )
             embedding_payload = body.get("embedding")
@@ -646,7 +646,7 @@ def register(mcp) -> None:
 
 
     # =============================================================
-    # /api/mcp-token/regenerate — 生成/轮换 mcp_auth_mode=token 用的静态密钥
+    # /api/mcp-token/regenerate — 生成/轮换 token/hybrid 使用的静态密钥
     # 独立成一个小路由（而不是塞进 POST /api/config）：生成新密钥和改配置项
     # 是两件不同的事，参照 oauth.py 里 token 签发自成一块的做法。
     # =============================================================
@@ -656,8 +656,8 @@ def register(mcp) -> None:
 
         Returns the plaintext token exactly once — GET /api/config only ever
         returns a masked hint, so the Dashboard must capture this response.
-        Takes effect immediately (no restart needed): _is_valid_static_mcp_token
-        reads sh.config/env fresh on every request.
+        Takes effect immediately when the running process is already in token
+        or hybrid mode: _is_valid_static_mcp_token reads live config/env state.
         """
         from starlette.responses import JSONResponse
         err = sh._require_auth(request)
