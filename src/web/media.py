@@ -12,7 +12,7 @@ from . import _shared as sh
 
 
 _reader_instance: MediaReader | None = None
-MEDIA_VIEWER_URI = "ui://ombre-brain/media-viewer-v1.html"
+MEDIA_VIEWER_URI = "ui://ombre-brain/media-viewer-v2.html"
 
 _MEDIA_VIEWER_HTML = r"""
 <!doctype html>
@@ -54,15 +54,33 @@ _MEDIA_VIEWER_HTML = r"""
       empty.hidden = gallery.childElementCount > 0;
       if (!empty.hidden) empty.textContent = "没有可预览的图片。";
     }
-    render(window.openai?.toolOutput);
-    window.addEventListener("message", (event) => {
-      if (event.source !== window.parent) return;
-      const message = event.data;
-      if (message?.jsonrpc === "2.0" &&
-          message.method === "ui/notifications/tool-result") {
+    function receive(message) {
+      if (message?.jsonrpc !== "2.0") return;
+      if (message.method === "ui/notifications/tool-result") {
         render(message.params?.structuredContent);
       }
+      if (message.id === initializeId && message.result) {
+        window.parent.postMessage({
+          jsonrpc: "2.0",
+          method: "ui/notifications/initialized"
+        }, "*");
+      }
+    }
+    const initializeId = 1;
+    window.addEventListener("message", (event) => {
+      if (event.source !== window.parent) return;
+      receive(event.data);
     }, { passive: true });
+    window.parent.postMessage({
+      jsonrpc: "2.0",
+      id: initializeId,
+      method: "ui/initialize",
+      params: {
+        appInfo: { name: "Ombre Brain media viewer", version: "2.0.0" },
+        appCapabilities: {},
+        protocolVersion: "2026-01-26"
+      }
+    }, "*");
   </script>
 </body>
 </html>

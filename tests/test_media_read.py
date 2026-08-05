@@ -23,8 +23,17 @@ async def test_media_read_is_advertised_as_strictly_read_only():
     assert annotations.destructiveHint is False
     assert annotations.openWorldHint is False
     assert annotations.idempotentHint is True
-    assert listed.meta["ui"]["resourceUri"] == "ui://ombre-brain/media-viewer-v1.html"
-    assert listed.meta["openai/outputTemplate"] == "ui://ombre-brain/media-viewer-v1.html"
+    assert listed.meta["ui"]["resourceUri"] == "ui://ombre-brain/media-viewer-v2.html"
+    assert listed.meta["openai/outputTemplate"] == "ui://ombre-brain/media-viewer-v2.html"
+
+
+def test_media_viewer_initializes_mcp_apps_bridge_before_receiving_results():
+    from web.media import _MEDIA_VIEWER_HTML
+
+    assert 'method: "ui/initialize"' in _MEDIA_VIEWER_HTML
+    assert 'method: "ui/notifications/initialized"' in _MEDIA_VIEWER_HTML
+    assert 'message.method === "ui/notifications/tool-result"' in _MEDIA_VIEWER_HTML
+    assert "render(message.params?.structuredContent)" in _MEDIA_VIEWER_HTML
 
 
 @pytest.mark.asyncio
