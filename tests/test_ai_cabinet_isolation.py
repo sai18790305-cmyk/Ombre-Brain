@@ -23,10 +23,14 @@ async def test_legacy_is_susu_and_new_writes_are_scoped(test_config):
         assert [bucket["id"] for bucket in visible] == [shenyan_id]
         assert visible[0]["metadata"]["ai_identity"] == "shenyan"
         assert await manager.get("legacy") is None
+        stats = await manager.get_stats()
+        assert stats["dynamic_count"] == 1
 
     visible = await manager.list_all()
     assert [bucket["id"] for bucket in visible] == ["legacy"]
     assert await manager.get(shenyan_id) is None
+    stats = await manager.get_stats()
+    assert stats["dynamic_count"] == 1
 
 
 @pytest.mark.asyncio
