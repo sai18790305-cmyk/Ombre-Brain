@@ -2789,6 +2789,25 @@ class BucketManager:
     def _visible_buckets(self, buckets: list[dict]) -> list[dict]:
         return [dict(bucket) for bucket in buckets if self._is_visible_bucket(bucket)]
 
+    def _all_indexable_bucket_ids_unscoped(self) -> set[str]:
+        """Return every live on-disk bucket ID for global index maintenance.
+
+        This deliberately returns IDs only. Cabinet-facing reads remain scoped,
+        while orphan detection must compare the shared embedding index against
+        every cabinet or another cabinet's valid vectors become false orphans.
+        """
+        bucket_ids: set[str] = set()
+        directories = list(self._active_dirs) + [self.archive_dir]
+        for _root, _fname, file_path in self._iter_md_files(directories):
+            bucket = self._load_bucket(file_path)
+            if (
+                bucket
+                and not bucket.get("metadata", {}).get("deleted_at")
+                and str(bucket.get("content") or "").strip()
+            ):
+                bucket_ids.add(str(bucket["id"]))
+        return bucket_ids
+
     # ---------------------------------------------------------
     # Statistics (counts per category + total size)
     # 统计信息（各分类桶数量 + 总体积）
