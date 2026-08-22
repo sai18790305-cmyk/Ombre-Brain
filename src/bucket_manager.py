@@ -2822,16 +2822,23 @@ class BucketManager:
             for root, _, files in os.walk(subdir):
                 for f in files:
                     if f.endswith(".md"):
-                        stats[key] += 1
                         fpath = os.path.join(root, f)
+                        bucket = self._load_bucket(fpath)
+                        if not bucket or not self._is_visible_bucket(bucket):
+                            continue
+                        stats[key] += 1
                         try:
                             stats["total_size_kb"] += os.path.getsize(fpath) / 1024
                         except OSError:
                             pass
                         # Per-domain counts / 每个域的桶数量
-                        domain_name = os.path.basename(root)
-                        if domain_name != os.path.basename(subdir):
-                            stats["domains"][domain_name] = stats["domains"].get(domain_name, 0) + 1
+                        domains = bucket.get("metadata", {}).get("domain") or []
+                        if isinstance(domains, str):
+                            domains = [domains]
+                        for domain_name in domains:
+                            name = str(domain_name).strip()
+                            if name:
+                                stats["domains"][name] = stats["domains"].get(name, 0) + 1
 
         return stats
 
@@ -2917,8 +2924,10 @@ class BucketManager:
         # shouldn't block a tag from being marked first_of_kind today.
         for _root, _fname, full_path in self._iter_md_files(self._active_dirs):
             try:
-                post = frontmatter.load(full_path)
-                for t in list(post.get("tags") or []):  # type: ignore[call-overload]
+                bucket = self._load_bucket(full_path)
+                if not bucket or not self._is_visible_bucket(bucket):
+                    continue
+                for t in list(bucket.get("metadata", {}).get("tags") or []):
                     if t:
                         tags.add(str(t))
             except Exception:
