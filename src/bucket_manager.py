@@ -41,6 +41,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime
 
 from plan_history import append_plan_change_log
+from identity_context import current_ai_identity, normalize_ai_identity
 
 # 统一错误体系：越界 clamp 时上报 OB-W001/OB-W002（rule.md §11）
 try:
@@ -1094,6 +1095,7 @@ class BucketManager:
         # 越界不静默 clamp：会产生 OB-W001/OB-W002 提示走到 MCP 返回末尾
         metadata = {
             "id": bucket_id,
+            "ai_identity": current_ai_identity(),
             "name": bucket_name,
             "tags": tags,
             "domain": domain,
@@ -1326,6 +1328,8 @@ class BucketManager:
         if not file_path:
             return None
         data = self._load_bucket(file_path)
+        if data and not self._is_visible_bucket(data):
+            return None
         # F-10: 软删除的桶不应通过 get() 可见
         if data and data.get("metadata", {}).get("deleted_at"):
             return None
@@ -1345,7 +1349,11 @@ class BucketManager:
         }
         for _root, _fname, file_path in self._iter_md_files(self._active_dirs):
             bucket = self._load_bucket(file_path)
-            if not bucket or bucket.get("content") != expected:
+            if (
+                not bucket
+                or not self._is_visible_bucket(bucket)
+                or bucket.get("content") != expected
+            ):
                 continue
             metadata = bucket.get("metadata", {})
             if metadata.get("deleted_at"):
@@ -1712,6 +1720,9 @@ class BucketManager:
         file_path = self._find_bucket_file(bucket_id)
         if not file_path:
             return False
+        existing = self._load_bucket(file_path)
+        if not existing or not self._is_visible_bucket(existing):
+            return False
 
         # Normalize public/migration inputs at the storage boundary.  A quoted
         # YAML value such as "false" must never be persisted as true merely
@@ -2044,6 +2055,9 @@ class BucketManager:
         file_path = self._find_bucket_file(bucket_id)
         if not file_path:
             return {"ok": False, "error": "not_found"}
+        existing = self._load_bucket(file_path)
+        if not existing or not self._is_visible_bucket(existing):
+            return {"ok": False, "error": "not_found"}
         try:
             post = frontmatter.load(file_path)
         except Exception as exc:
@@ -2109,6 +2123,9 @@ class BucketManager:
     async def _delete_locked(self, bucket_id: str) -> bool:
         file_path = self._find_bucket_file(bucket_id)
         if not file_path:
+            return False
+        existing = self._load_bucket(file_path)
+        if not existing or not self._is_visible_bucket(existing):
             return False
 
         # --- 读取文件，写入 deleted_at，移入 archive/ ---
@@ -2192,6 +2209,9 @@ class BucketManager:
     async def _touch_locked(self, bucket_id: str) -> datetime | None:
         file_path = self._find_bucket_file(bucket_id)
         if not file_path:
+            return None
+        existing = self._load_bucket(file_path)
+        if not existing or not self._is_visible_bucket(existing):
             return None
 
         try:
@@ -2643,7 +2663,7 @@ class BucketManager:
         results = []
         for _root, _fname, file_path in self._iter_md_files([self.feel_dir]):
             bucket = self._load_bucket(file_path)
-            if not bucket:
+            if not bucket or not self._is_visible_bucket(bucket):
                 continue
             meta = bucket.get("metadata", {})
             if meta.get("triggered_by") == source_bucket_id:
@@ -2667,7 +2687,7 @@ class BucketManager:
                 bucket = self._load_bucket(file_path)
                 if bucket:
                     buckets.append(bucket)
-            return buckets
+            return self._visible_buckets(buckets)
 
         # Active buckets use a parsed cache, but Obsidian/Git/manual edits may
         # bypass BucketManager.  The build mutex is cross-loop; the short state
@@ -2688,7 +2708,7 @@ class BucketManager:
                             >= self.external_change_poll_seconds
                         )
                         if not poll_due:
-                            return [dict(bucket) for bucket in cached]
+                            return self._visible_buckets(cached)
                         cached_state = dict(self._active_file_state)
                     else:
                         poll_due = False
@@ -2704,7 +2724,7 @@ class BucketManager:
                         if current_state == cached_state:
                             current_cache = self._active_cache
                             if current_cache is not None:
-                                return [dict(bucket) for bucket in current_cache]
+                                return self._visible_buckets(current_cache)
                             continue
 
                         previous_cache = [dict(bucket) for bucket in cached]
@@ -2746,7 +2766,22 @@ class BucketManager:
 
                 if previous_cache is not None:
                     self._reconcile_external_changes(previous_cache, buckets)
-                return buckets
+                return self._visible_buckets(buckets)
+
+    @staticmethod
+    def _bucket_identity(bucket: dict) -> str:
+        return normalize_ai_identity(
+            bucket.get("metadata", {}).get("ai_identity"), legacy_default=True
+        )
+
+    def _is_visible_bucket(self, bucket: dict) -> bool:
+        try:
+            return self._bucket_identity(bucket) == current_ai_identity()
+        except ValueError:
+            return False
+
+    def _visible_buckets(self, buckets: list[dict]) -> list[dict]:
+        return [dict(bucket) for bucket in buckets if self._is_visible_bucket(bucket)]
 
     # ---------------------------------------------------------
     # Statistics (counts per category + total size)
@@ -2811,6 +2846,9 @@ class BucketManager:
     async def _archive_locked(self, bucket_id: str) -> bool:
         file_path = self._find_bucket_file(bucket_id)
         if not file_path:
+            return False
+        existing = self._load_bucket(file_path)
+        if not existing or not self._is_visible_bucket(existing):
             return False
 
         try:

@@ -42,7 +42,7 @@ EXPECTED_TOOLS = {
 
 EXPECTED_TOOL_PROPERTIES = {
     "breath": set(),
-    "breath_search": {"query", "domain", "max_results"},
+    "breath_search": {"query", "domain", "max_results", "cabinet"},
     "breath_advanced": {
         "query",
         "max_tokens",
@@ -53,6 +53,7 @@ EXPECTED_TOOL_PROPERTIES = {
         "importance_min",
         "tags",
         "catalog",
+        "cabinet",
     },
     "hold": {
         "content",
@@ -100,9 +101,9 @@ EXPECTED_TOOL_PROPERTIES = {
     "pulse": {"include_archive"},
     "plan": {"content", "status", "related_bucket", "weight", "why_remembered"},
     "letter_write": {"author", "content", "user_name", "title", "date", "ai_name"},
-    "letter_read": {"query", "limit", "author", "date_from", "date_to"},
+    "letter_read": {"query", "limit", "author", "date_from", "date_to", "cabinet"},
     "I": {"content", "aspect", "read", "limit"},
-    "dream": {"window_hours"},
+    "dream": {"window_hours", "cabinet"},
 }
 
 EXPECTED_REQUIRED_PROPERTIES = {
