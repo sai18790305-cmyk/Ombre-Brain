@@ -41,7 +41,11 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime
 
 from plan_history import append_plan_change_log
-from identity_context import current_ai_identity, normalize_ai_identity
+from identity_context import (
+    cabinet_writes_allowed,
+    current_ai_identity,
+    normalize_ai_identity,
+)
 
 # 统一错误体系：越界 clamp 时上报 OB-W001/OB-W002（rule.md §11）
 try:
@@ -2198,6 +2202,8 @@ class BucketManager:
 
         ripple=False 可跳过读全库的时间涟漪（性能 P2：批量浮现时不值当为它多跑 list_all）。
         """
+        if not cabinet_writes_allowed():
+            return
         # Commit the source touch first, then release its turn before taking
         # any neighbour turns.  Keeping the source lock while acquiring a
         # target lock lets concurrent A->B and B->A ripples deadlock.

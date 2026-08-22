@@ -1,7 +1,12 @@
 import pytest
 
 from bucket_manager import BucketManager
-from identity_context import current_ai_identity, use_ai_identity
+from identity_context import (
+    cabinet_writes_allowed,
+    current_ai_identity,
+    use_ai_identity,
+    use_read_identity,
+)
 from server_app import AICabinetMiddleware
 
 
@@ -48,3 +53,13 @@ async def test_cabinet_middleware_rewrites_only_shenyan_endpoint():
 
     assert seen == [("/mcp", "susu"), ("/mcp", "shenyan")]
     assert current_ai_identity() == "susu"
+
+
+def test_explicit_cross_cabinet_context_is_read_only():
+    with use_ai_identity("shenyan"):
+        assert cabinet_writes_allowed() is True
+        with use_read_identity("susu"):
+            assert current_ai_identity() == "susu"
+            assert cabinet_writes_allowed() is False
+        assert current_ai_identity() == "shenyan"
+        assert cabinet_writes_allowed() is True
