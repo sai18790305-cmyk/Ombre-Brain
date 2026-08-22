@@ -51,7 +51,7 @@ from embedding_outbox import EmbeddingOutbox
 from import_memory import ImportEngine
 from migrate_engine import MigrateEngine
 from utils import get_version, load_config, setup_logging
-from identity_context import current_ai_identity, use_ai_identity
+from identity_context import use_read_identity
 
 # --- iter 2.1：MCP 工具实现已按代码路径拆分到 tools/ 子包 ---
 # 本文件只保留 MCP 注册 + 路由（HTTP custom_route）+ 共享辅助。
@@ -593,8 +593,7 @@ async def breath_search(
     cabinet: Optional[str] = "",
 ) -> str:
     """按关键词/语义检索记忆桶,融合关键词/BM25+语义检索,向量不可用时明确提示并退回关键词检索。命中后逐字返回桶内当前 content，不调用 LLM 摘要/改写。domain 逗号分隔,按主题域预筛。max_results=返回条数上限(默认 config.surfacing.breath_max_results,fallback 20,最大 50)。需要 tags/importance_min/valence/arousal/max_tokens/catalog 等更多过滤维度用 breath_advanced(...)。"""
-    cabinet_context = use_ai_identity(cabinet) if cabinet else use_ai_identity(current_ai_identity())
-    with cabinet_context:
+    with use_read_identity(cabinet):
         return await _with_notice(
             _t_breath.dispatch(query=query, domain=domain, max_results=max_results),
             op="breath_search",
@@ -616,8 +615,7 @@ async def breath_advanced(
     cabinet: Optional[str] = "",
 ) -> str:
     """breath 的完整参数版,给需要精细控制的场景用(日常用 breath()/breath_search() 就够了)。不传 query=返回权重最高的未解决记忆;传 query=融合关键词/BM25+语义检索，向量不可用时明确提示并退回关键词检索。命中后逐字返回桶内当前 content，不调用 LLM 摘要/改写；max_tokens 不足时整桶省略，绝不截断正文。catalog=True=目录模式:只返回每桶一行元数据(名称|域|重要度,0 LLM 调用,最省 token),适合开新对话先看目录再 breath_search(query=...) 精准拉取,可配 domain 过滤。max_tokens=单次返回总 token 上限(默认 config.surfacing.breath_max_tokens,fallback 10000)。domain 逗号分隔,valence/arousal 0~1(-1 忽略)。max_results=返回条数上限(默认 config.surfacing.breath_max_results,fallback 20,最大 50)。importance_min>=1=跳过语义检索,按重要度降序返回最多 20 条高重要度记忆。tags 逗号分隔,AND 过滤;tags=\"feel\" 或 \"__feel__\" 等价于 domain=\"feel\",返回所有 feel 类记忆。"""
-    cabinet_context = use_ai_identity(cabinet) if cabinet else use_ai_identity(current_ai_identity())
-    with cabinet_context:
+    with use_read_identity(cabinet):
         return await _with_notice(
         _t_breath.dispatch(
             query=query, max_tokens=max_tokens, domain=domain,
@@ -861,8 +859,7 @@ async def letter_read(
     cabinet: Optional[str] = "",
 ) -> str:
     """检索历史信件。query=语义检索(可选);author 按署名过滤(\"user\"=用户侧,\"ai\"=AI 侧,也可传具体署名字符串);date_from/date_to=ISO 日期范围(可选)。无 query 时按时间倒序返回最近 limit 封。返回完整原文,不压缩。"""
-    cabinet_context = use_ai_identity(cabinet) if cabinet else use_ai_identity(current_ai_identity())
-    with cabinet_context:
+    with use_read_identity(cabinet):
         return await _with_notice(
         _t_plan.letter_read(
             query=query, limit=limit, author=author,
@@ -898,8 +895,7 @@ async def dream(window_hours: Optional[int] = 48, cabinet: Optional[str] = "") -
     每个桶返回其在窗口内的最新内容（按 last_active 取）,完整正文不截断。
     可据此操作：放下的 → trace(resolved=1) 沉底；有沉淀的 → hold(feel=True, source_bucket=...) 记录；无沉淀则不操作。
     候选桶超过 40 时按 decay_engine.calculate_score() 排序取前 40，避免一次返回过多。"""
-    cabinet_context = use_ai_identity(cabinet) if cabinet else use_ai_identity(current_ai_identity())
-    with cabinet_context:
+    with use_read_identity(cabinet):
         return await _with_notice(
             _t_dream.dispatch(window_hours=window_hours),
             op="dream",
