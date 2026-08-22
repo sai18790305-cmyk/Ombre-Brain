@@ -113,7 +113,8 @@ async def pulse(include_archive: Optional[bool] = False) -> str:
             }
             index_ids = set(ee.list_all_ids())
             missing = disk_ids - index_ids - pending_ids
-            orphan = index_ids - disk_ids
+            all_disk_ids = rt.bucket_mgr._all_indexable_bucket_ids_unscoped()
+            orphan = index_ids - all_disk_ids
             if missing or orphan:
                 status += (
                     f"⚠️ 索引漂移：缺失 embedding {len(missing)} 个 / "
