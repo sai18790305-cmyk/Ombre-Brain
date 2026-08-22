@@ -20,6 +20,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from public_origin import configured_public_origin, normalize_public_origin
 from utils import parse_bool
+from identity_context import use_ai_identity
 from web.request_limits import (
     MCPRequestBodyLimitMiddleware,
     ManagementRequestBodyLimitMiddleware,
@@ -33,6 +34,27 @@ DEFAULT_MAX_MANAGEMENT_REQUEST_BYTES = 4 * 1024 * 1024
 DEFAULT_HEALTH_PROBE_TIMEOUT_SECONDS = 5.0
 DEFAULT_KEEPALIVE_INITIAL_DELAY_SECONDS = 10.0
 DEFAULT_KEEPALIVE_INTERVAL_SECONDS = 60.0
+
+
+class AICabinetMiddleware:
+    """Map cabinet URLs onto the existing MCP app and set request identity."""
+
+    def __init__(self, app: Any):
+        self.app = app
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        if scope.get("type") not in {"http", "websocket"}:
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        identity = "susu"
+        if path in {"/mcp/shenyan", "/mcp/shenyan/"}:
+            identity = "shenyan"
+            scope = dict(scope)
+            scope["path"] = "/mcp"
+            scope["raw_path"] = b"/mcp"
+        with use_ai_identity(identity):
+            await self.app(scope, receive, send)
 
 # The shared OAuth endpoint keeps the complete tool surface.  A static token
 # accepted in hybrid mode is deliberately narrower: it can only discover and
@@ -1005,6 +1027,9 @@ def build_http_app(
     # successful tool calls, so add it last (see NgrokHeaderMiddleware).
     app.add_middleware(NgrokHeaderMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
+    # Added last so it is outermost: cabinet selection happens before auth,
+    # request limits, and FastMCP routing.
+    app.add_middleware(AICabinetMiddleware)
     app.state.ombre_http_settings = settings
     app.state.ombre_runtime_lifecycle = lifecycle
     return app
