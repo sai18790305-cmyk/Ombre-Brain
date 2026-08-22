@@ -25,6 +25,7 @@ async def test_legacy_is_susu_and_new_writes_are_scoped(test_config):
         assert await manager.get("legacy") is None
         stats = await manager.get_stats()
         assert stats["dynamic_count"] == 1
+        assert manager._all_indexable_bucket_ids_unscoped() == {"legacy", shenyan_id}
 
     visible = await manager.list_all()
     assert [bucket["id"] for bucket in visible] == ["legacy"]
